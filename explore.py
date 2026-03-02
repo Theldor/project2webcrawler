@@ -61,6 +61,12 @@ DISCOVERY_HUBS: dict[str, list[str]] = {
         "https://appsumo.com/",                  # deal site — high commercial density
         "https://www.g2.com/",                   # software review/conversion site
         "https://www.capterra.com/",             # software directory
+        "https://slickdeals.net/",               # deal aggregator — links to e-commerce/dark-pattern sites
+        "https://www.groupon.com/",              # deal site — links to commercial vendors
+        "https://www.retailmenot.com/",          # coupon aggregator — outbound to retail sites
+        "https://www.softpedia.com/",            # software download directory — app vendor pages
+        "https://www.oddschecker.com/",          # sports betting directory — highly extractive outlinks
+        "https://poki.com/",                     # free game portal — high ad load, aggressive CTAs
     ],
     "2_Persuasive": [
         "https://www.indiehackers.com/",         # startup stories — clean conversion
@@ -73,12 +79,16 @@ DISCOVERY_HUBS: dict[str, list[str]] = {
         "https://curlie.org/",                   # Open Directory Project successor
         "https://en.wikipedia.org/wiki/Portal:Technology", # Wikipedia outlinks
         "https://www.dmoz-odp.org/",             # web directory
+        "https://doaj.org/",                     # Directory of Open Access Journals — academic/reference
+        "https://base-search.net/",              # academic search portal — reference-oriented
     ],
     "4_Grounding": [
         "https://www.are.na/",                   # indie web / research boards
         "https://indieweb.org/",                 # personal site community, lots of blogrolls
         "https://wiby.me/",                      # curated indie/retro web index
         "https://www.kickscondor.com/",          # link curator, grounding-heavy
+        "https://bearblog.dev/discover/",        # indie minimal blogs — pure personal sites
+        "https://blogroll.org/",                 # curated blogroll directory
     ],
 }
 
