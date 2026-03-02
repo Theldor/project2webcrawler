@@ -1,6 +1,6 @@
 # Machine as Judge — Web Interface Dataset Crawler
 
-A Playwright-based screenshot capture tool for building an image dataset to train a CNN classifier that judges web interfaces on their ethical design intent.
+A Playwright-based pipeline for building an image dataset to train a CNN classifier that judges web interfaces on their ethical design intent.
 
 ---
 
@@ -19,21 +19,23 @@ This project explores the idea of the **"Machine as Judge"** — training a clas
 
 ---
 
-## How It Works
+## Scripts
 
-1. **Visits** each URL in the hardcoded dictionary using headless Chromium at a fixed **1280×800** viewport
-2. **Waits** 5 seconds after page load so cookie banners, modals, and pop-ups render
-3. **Classifies** the page automatically using JS heuristics (runs inside the browser before the screenshot)
-4. **Screenshots** the visible viewport and saves it to `dataset/<category>/`
-5. **Prints** a comparison of the human-assigned label vs. the auto-classified label
+### `capture.py` — Hand-Curated Ground Truth
 
-No ad-blockers are used — extractive sites need to show their full visual noise.
+Visits pre-labeled URLs from a hardcoded dictionary using Chromium (headed or headless). Primary dataset builder.
 
----
+**How it works:**
 
-## Auto-Classifier
+1. Visits each URL at a fixed **1280×800** viewport
+2. Waits 5 seconds after page load so cookie banners and modals render
+3. Runs a JS heuristic classifier (15 signals measured in-browser) before the screenshot
+4. Screenshots the visible viewport and saves it to `dataset/<category>/`
+5. Prints a comparison of human-assigned vs. auto-classified label
 
-After each page loads, a JavaScript evaluation measures 15 signals:
+No ad-blockers — extractive sites need to show their full visual noise.
+
+**JS Auto-Classifier signals:**
 
 | Signal | What it measures |
 |---|---|
@@ -53,28 +55,9 @@ After each page loads, a JavaScript evaluation measures 15 signals:
 | `wordCount` | Total page word count |
 | `formCount` | Number of forms |
 
-Signals are scored against each category's feature profile. The highest score wins. The terminal output shows `✓` when auto matches human and `≠` when they disagree — disagreements are the most analytically interesting cases.
+The terminal output shows `✓` when auto matches human and `≠` when they disagree — disagreements are the most analytically interesting cases.
 
----
-
-## Setup
-
-**Requirements:** Python 3.14+
-
-```bash
-pip install playwright
-playwright install chromium
-```
-
----
-
-## Usage
-
-```bash
-python capture.py
-```
-
-Screenshots are saved to:
+**Output:**
 ```
 dataset/
 ├── 1_Extractive/
@@ -87,24 +70,104 @@ Each file is named `<index>_<domain>.png` (e.g. `001_apple_com.png`).
 
 ---
 
+### `clean_dataset.py` — Manifest & Failed URLs
+
+Builds a clean manifest from successful screenshots + human labels (CSV). Outputs `dataset_manifest.csv` and `failed_urls.csv` for training.
+
+```bash
+python clean_dataset.py
+```
+
+---
+
+### `explore.py` — LLM-Powered URL Discovery & Classification
+
+Crawls outward from the seed pages in `capture.py`, discovers new websites, and classifies them using Groq's Llama 3.2 Vision API. Expands the dataset beyond the hand-curated dictionary.
+
+**How it works (3-phase pipeline):**
+
+1. **Phase 1 — Crawl Seeds:** Visits every URL in `capture.py`'s dictionary, extracts external links, deduplicates by domain, and builds a candidate pool of up to 50 new URLs
+2. **Phase 2 — Screenshot:** Navigates to each candidate using headless Chromium and saves a PNG to a staging path
+3. **Phase 3 — Classify:** Sends each screenshot (base64-encoded) to Groq's Llama 3.2 Vision model, which returns a JSON classification. Moves the PNG to `dataset_explored/<category>/` and appends a row to `explore_log.csv`
+
+**Output:**
+```
+dataset_explored/
+├── 1_Extractive/
+├── 2_Persuasive/
+├── 3_Neutral/
+└── 4_Grounding/
+explore_log.csv    (url, predicted_category, confidence, reasoning, timestamp)
+```
+
+---
+
+## Setup
+
+**Requirements:** Python 3.14+
+
+```bash
+pip install playwright groq
+playwright install chromium
+```
+
+For `explore.py`, you also need a [Groq API key](https://console.groq.com) (free tier, no credit card required):
+
+```bash
+# Unix / macOS
+export GROQ_API_KEY=your-key-here
+
+# Windows CMD
+set GROQ_API_KEY=your-key-here
+```
+
+---
+
+## Usage
+
+```bash
+# Build the hand-curated ground-truth dataset
+python capture.py
+
+# Build manifest from screenshots + CSV labels
+python clean_dataset.py
+
+# Discover and classify new URLs via LLM
+python explore.py
+```
+
+---
+
 ## Configuration
 
-All tunable constants are at the top of [capture.py](capture.py):
+**`capture.py`** — all constants at the top of the file:
 
 | Constant | Default | Description |
 |---|---|---|
 | `VIEWPORT_WIDTH` | `1280` | Browser viewport width |
 | `VIEWPORT_HEIGHT` | `800` | Browser viewport height |
 | `POST_LOAD_DELAY` | `5` | Seconds to wait after load (lets modals appear) |
-| `NAV_TIMEOUT` | `30000` | Max ms to wait per page load |
+| `NAV_TIMEOUT` | `45000` | Max ms to wait per page load |
+| `WAIT_UNTIL` | `domcontentloaded` | Page load strategy (`load` can hang on heavy sites) |
+| `DELAY_BETWEEN_SITES` | `3` | Seconds between captures (reduces rate limiting) |
+| `SKIP_EXISTING` | `True` | Skip URLs that already have a screenshot |
 | `OUTPUT_DIR` | `dataset` | Root folder for screenshots |
 
-To add or change URLs, edit the `URLS` dictionary in [capture.py](capture.py).
+**`explore.py`** — all constants at the top of the file:
+
+| Constant | Default | Description |
+|---|---|---|
+| `MAX_NEW_URLS` | `50` | Max new URLs to discover per run |
+| `GROQ_MODEL` | `llama-3.2-11b-vision-preview` | Groq vision model |
+| `OUTPUT_DIR` | `dataset_explored` | Root folder for discovered screenshots |
+| `LOG_FILE` | `explore_log.csv` | CSV log of all classifications |
 
 ---
 
 ## Notes
 
-- The `dataset/` folder is excluded from version control (`.gitignore`) — screenshots are local only
-- Sites that block headless browsers or require login will fail gracefully and be skipped
-- The classifier is heuristic, not ML-based — it is a labeling aid, not the end product
+- The `dataset/` and `dataset_explored/` folders are excluded from version control — screenshots are local only
+- Sites that block headless browsers or require login fail gracefully and are skipped
+- The JS classifier in `capture.py` is a labeling aid, not the end product — disagreements with human labels are intentional signal
+- `explore.py` requires `GROQ_API_KEY` set as an environment variable before running
+- See [requirements.md](requirements.md) for the training/classifier roadmap
