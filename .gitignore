@@ -1,8 +1,12 @@
 # Google service account key — never commit
 credentials.json
 
-# Screenshot dataset — too large for git, store elsewhere
+# Screenshot datasets — too large for git, store elsewhere
 dataset/
+dataset_explored/
+
+# Exploration log (local only)
+explore_log.csv
 
 # Python
 __pycache__/
