@@ -53,7 +53,7 @@ VIEWPORT_HEIGHT = 800
 POST_LOAD_DELAY = 5          # seconds — lets cookie banners / modals appear
 NAV_TIMEOUT     = 30_000     # milliseconds — max wait per page load
 
-GROQ_MODEL = "llama-3.2-11b-vision-preview"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 SOCIAL_MEDIA_DOMAINS = {
     "twitter.com", "x.com", "facebook.com", "instagram.com",
@@ -187,8 +187,8 @@ def extract_external_links(page, seed_url: str, seen_domains: set[str]) -> list[
         if candidate_domain == seed_domain:
             continue
 
-        # 4. Skip domains already in capture.URLS or already seen
-        if candidate_domain in seen_domains:
+        # 4. Skip domains already in capture.URLS or already seen (including subdomains)
+        if any(candidate_domain == d or candidate_domain.endswith("." + d) for d in seen_domains):
             continue
 
         # 5. Skip social media domains (including subdomains)
