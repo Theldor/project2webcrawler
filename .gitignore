@@ -1,0 +1,13 @@
+# Google service account key — never commit
+credentials.json
+
+# Screenshot dataset — too large for git, store elsewhere
+dataset/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# VS Code / Claude
+.claude/settings.local.json
