@@ -45,13 +45,42 @@ except ImportError:
 # CONFIGURATION
 # ---------------------------------------------------------------------------
 
-MAX_NEW_URLS    = 50
+MAX_PER_CATEGORY = 15         # balanced cap per category
 OUTPUT_DIR      = "dataset_explored"
 LOG_FILE        = "explore_log.csv"
 VIEWPORT_WIDTH  = 1280
 VIEWPORT_HEIGHT = 800
 POST_LOAD_DELAY = 5          # seconds — lets cookie banners / modals appear
 NAV_TIMEOUT     = 30_000     # milliseconds — max wait per page load
+
+# Hub pages whose outbound links are representative of each category.
+# Each list contains 4-5 pages known to link outward to many similar sites.
+DISCOVERY_HUBS: dict[str, list[str]] = {
+    "1_Extractive": [
+        "https://www.producthunt.com/",          # SaaS/app launches — heavy CTAs
+        "https://appsumo.com/",                  # deal site — high commercial density
+        "https://www.g2.com/",                   # software review/conversion site
+        "https://www.capterra.com/",             # software directory
+    ],
+    "2_Persuasive": [
+        "https://www.indiehackers.com/",         # startup stories — clean conversion
+        "https://www.ycombinator.com/companies", # YC company directory
+        "https://webflow.com/made-in-webflow",   # curated design showcase
+        "https://www.crunchbase.com/",           # startup/company profiles
+    ],
+    "3_Neutral": [
+        "https://news.ycombinator.com/",         # Hacker News — link aggregator
+        "https://curlie.org/",                   # Open Directory Project successor
+        "https://en.wikipedia.org/wiki/Portal:Technology", # Wikipedia outlinks
+        "https://www.dmoz-odp.org/",             # web directory
+    ],
+    "4_Grounding": [
+        "https://www.are.na/",                   # indie web / research boards
+        "https://indieweb.org/",                 # personal site community, lots of blogrolls
+        "https://wiby.me/",                      # curated indie/retro web index
+        "https://www.kickscondor.com/",          # link curator, grounding-heavy
+    ],
+}
 
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
@@ -225,51 +254,61 @@ def extract_external_links(page, seed_url: str, seen_domains: set[str]) -> list[
 # PHASE 1: CRAWL SEEDS
 # ---------------------------------------------------------------------------
 
-def crawl_seeds(browser, known_domains: set[str]) -> list[str]:
+def crawl_hubs(browser, known_domains: set[str]) -> list[tuple[str, str]]:
     """
-    Visit every seed URL from capture.URLS, extract external links,
-    and return a deduplicated candidate list capped at MAX_NEW_URLS.
+    Visit each hub page in DISCOVERY_HUBS, extract external links, and
+    return a balanced list of (category_hint, url) tuples capped at
+    MAX_PER_CATEGORY per category.
     """
-    seen_domains = set(known_domains)  # grows as candidates are accepted
-    candidates: list[str] = []
+    seen_domains = set(known_domains)
+    # category_hint -> list of root URLs found so far for that category
+    buckets: dict[str, list[str]] = {cat: [] for cat in DISCOVERY_HUBS}
 
-    all_seeds: list[tuple[str, str]] = [
-        (category, url)
-        for category, urls in SEED_URLS.items()
-        for url in urls
-    ]
-    total_seeds = len(all_seeds)
+    total_hubs = sum(len(v) for v in DISCOVERY_HUBS.values())
+    hub_idx = 0
 
-    for i, (category, seed_url) in enumerate(all_seeds, start=1):
-        if len(candidates) >= MAX_NEW_URLS:
-            break
+    for category, hub_urls in DISCOVERY_HUBS.items():
+        for hub_url in hub_urls:
+            hub_idx += 1
+            if len(buckets[category]) >= MAX_PER_CATEGORY:
+                break
 
-        print(f"  [CRAWL {i}/{total_seeds}] {category} | {seed_url}")
+            print(f"  [HUB {hub_idx}/{total_hubs}] {category} | {hub_url}")
 
-        page = browser.new_page(
-            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}
-        )
-        page.set_default_navigation_timeout(NAV_TIMEOUT)
+            page = browser.new_page(
+                viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}
+            )
+            page.set_default_navigation_timeout(NAV_TIMEOUT)
 
-        try:
-            page.goto(seed_url, wait_until="networkidle")
-            links = extract_external_links(page, seed_url, seen_domains)
-            for link in links:
-                if len(candidates) >= MAX_NEW_URLS:
-                    break
-                parsed = urlparse(link)
-                domain = _normalize_domain(parsed.hostname or "")
-                if domain and domain not in seen_domains:
-                    candidates.append(link)
-                    seen_domains.add(domain)
-                    print(f"    [FOUND] {link}")
-        except PlaywrightTimeoutError:
-            print(f"    !! TIMEOUT on seed")
-        except Exception as exc:
-            print(f"    !! FAILED on seed: {exc}")
-        finally:
-            page.close()
+            try:
+                page.goto(hub_url, wait_until="networkidle")
+                links = extract_external_links(page, hub_url, seen_domains)
+                for link in links:
+                    if len(buckets[category]) >= MAX_PER_CATEGORY:
+                        break
+                    parsed = urlparse(link)
+                    domain = _normalize_domain(parsed.hostname or "")
+                    if domain and domain not in seen_domains:
+                        buckets[category].append(link)
+                        seen_domains.add(domain)
+                        print(f"    [FOUND] {link}")
+            except PlaywrightTimeoutError:
+                print(f"    !! TIMEOUT on hub")
+            except Exception as exc:
+                print(f"    !! FAILED on hub: {exc}")
+            finally:
+                page.close()
 
+    # Interleave categories so Phase 2+3 sees variety, not all-extractive then all-grounding
+    candidates: list[tuple[str, str]] = []
+    max_len = max(len(v) for v in buckets.values()) if buckets else 0
+    for i in range(max_len):
+        for cat in DISCOVERY_HUBS:
+            if i < len(buckets[cat]):
+                candidates.append((cat, buckets[cat][i]))
+
+    print(f"\n  Category breakdown: " +
+          ", ".join(f"{cat}: {len(urls)}" for cat, urls in buckets.items()))
     return candidates
 
 
@@ -410,18 +449,19 @@ def main() -> None:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
 
-        # ── PHASE 1: CRAWL SEEDS ──────────────────────────────────────────
-        print(f"\n[PHASE 1] Crawling {sum(len(v) for v in SEED_URLS.values())} seed pages "
-              f"to discover up to {MAX_NEW_URLS} new URLs...\n")
-        candidates = crawl_seeds(browser, known_domains)
+        # ── PHASE 1: CRAWL HUBS ───────────────────────────────────────────
+        total_hubs = sum(len(v) for v in DISCOVERY_HUBS.values())
+        print(f"\n[PHASE 1] Crawling {total_hubs} hub pages "
+              f"(up to {MAX_PER_CATEGORY} URLs per category)...\n")
+        candidates = crawl_hubs(browser, known_domains)
         print(f"\n[PHASE 1] Complete. {len(candidates)} candidate URLs discovered.\n")
 
         # ── PHASE 2 + 3: SCREENSHOT + CLASSIFY ───────────────────────────
         print(f"[PHASE 2+3] Screenshotting and classifying {len(candidates)} candidates...\n")
 
-        for idx, url in enumerate(candidates, start=1):
+        for idx, (category_hint, url) in enumerate(candidates, start=1):
             domain = domain_from_url(url)
-            print(f"  [{idx}/{len(candidates)}] {url}")
+            print(f"  [{idx}/{len(candidates)}] {url} (hint: {category_hint})")
 
             staging_path = os.path.join(OUTPUT_DIR, f"_staging_{domain}.png")
 
