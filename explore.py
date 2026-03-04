@@ -569,7 +569,12 @@ def main() -> None:
 
             category_dir = os.path.join(OUTPUT_DIR, category)
             os.makedirs(category_dir, exist_ok=True)
-            final_path = os.path.join(category_dir, f"{idx:03d}_{domain}.png")
+            # Use domain as base name; append _2, _3, etc. if file exists
+            final_path = os.path.join(category_dir, f"{domain}.png")
+            counter = 2
+            while os.path.exists(final_path):
+                final_path = os.path.join(category_dir, f"{domain}_{counter}.png")
+                counter += 1
             os.rename(staging_path, final_path)
 
             append_log(LOG_FILE, url, result)
