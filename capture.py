@@ -434,14 +434,10 @@ def analyze_page(page) -> dict:
         const ctaCount = clickables.filter(el => ctaRe.test(el.innerText || '')).length;
 
         // ── Fixed / sticky elements ──────────────────────────────────
-<<<<<<< HEAD
         // Check only structural elements (not every *) — heavy sites like Daily Mail
         // have 10k+ nodes; getComputedStyle on all hangs
         const structural = document.querySelectorAll('div, header, nav, aside, section, footer, main');
         const fixedCount = Array.from(structural).filter(el => {
-=======
-        const fixedCount = Array.from(document.querySelectorAll('*')).filter(el => {
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
             const p = window.getComputedStyle(el).position;
             return p === 'fixed' || p === 'sticky';
         }).length;
@@ -479,15 +475,10 @@ def analyze_page(page) -> dict:
         ).length;
 
         // ── Social proof ─────────────────────────────────────────────
-<<<<<<< HEAD
         // Use section, article only — div[class] matches thousands on card-heavy sites (e.g. thangs.com)
         const socialRe = /testimonial|review|rating|customer|trust|star|press|award/i;
         const socialEls = document.querySelectorAll('section, article');
         const socialCount = Array.from(socialEls).filter(el =>
-=======
-        const socialRe = /testimonial|review|rating|customer|trust|star|press|award/i;
-        const socialCount = Array.from(document.querySelectorAll('section, div[class], article')).filter(el =>
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
             socialRe.test((el.className || '') + (el.id || ''))
         ).length;
 
@@ -603,22 +594,15 @@ def classify_page(page) -> tuple[str, dict, dict]:
 
 def capture_screenshots() -> None:
     with sync_playwright() as pw:
-<<<<<<< HEAD
         browser = pw.chromium.launch(
             headless=False,
             channel="chrome",
         )
-=======
-        browser = pw.chromium.launch(headless=True)
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
 
         total = sum(len(urls) for urls in URLS.values())
         captured = 0
         failed = 0
-<<<<<<< HEAD
         skipped = 0
-=======
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
 
         for category, urls in URLS.items():
             category_dir = os.path.join(OUTPUT_DIR, category)
@@ -629,7 +613,6 @@ def capture_screenshots() -> None:
                 filename = f"{idx:03d}_{domain}.png"
                 filepath = os.path.join(category_dir, filename)
 
-<<<<<<< HEAD
                 # Skip if already captured (re-runs only retry failures)
                 if SKIP_EXISTING and os.path.exists(filepath):
                     skipped += 1
@@ -676,49 +659,11 @@ def capture_screenshots() -> None:
                 # Pause between sites to reduce rate limiting / ERR_INTERNET_DISCONNECTED
                 if DELAY_BETWEEN_SITES > 0:
                     time.sleep(DELAY_BETWEEN_SITES)
-=======
-                print(f"[{category}] ({idx}/{len(urls)}) {url}")
-
-                # Fresh page per URL — prevents navigation cascade on errors
-                page = browser.new_page(
-                    viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
-                )
-                page.set_default_navigation_timeout(NAV_TIMEOUT)
-
-                auto_category = ""
-
-                try:
-                    page.goto(url, wait_until="networkidle")
-                    time.sleep(POST_LOAD_DELAY)
-
-                    # Classify while page is still open
-                    try:
-                        auto_category, _, _ = classify_page(page)
-                    except Exception as exc:
-                        auto_category = "unknown"
-                        print(f"  !! classify failed: {exc}")
-
-                    page.screenshot(path=filepath)
-                    captured += 1
-                    match = "✓" if auto_category == category else "≠"
-                    print(f"  -> saved | auto: {auto_category} {match} human: {category}")
-
-                except Exception as exc:
-                    failed += 1
-                    print(f"  !! FAILED: {exc}")
-                    continue
-                finally:
-                    page.close()
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
 
         browser.close()
 
         print("\n" + "=" * 50)
-<<<<<<< HEAD
         print(f"Done.  Captured: {captured}  |  Skipped: {skipped}  |  Failed: {failed}  |  Total: {total}")
-=======
-        print(f"Done.  Captured: {captured}  |  Failed: {failed}  |  Total: {total}")
->>>>>>> beddbe0538b98a0c8f90f1912bd3f70586412a66
         print(f"Screenshots saved to: {os.path.abspath(OUTPUT_DIR)}/")
         print("=" * 50)
 

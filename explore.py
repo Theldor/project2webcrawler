@@ -94,6 +94,60 @@ DISCOVERY_HUBS: dict[str, list[str]] = {
 
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
+# Stealth browser settings — makes headless Chromium look like a real browser
+STEALTH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+# HTTP status codes that indicate a block or error — skip these pages
+BAD_STATUS_CODES = {401, 403, 404, 410, 429, 451, 500, 502, 503, 504}
+
+# JS snippet that checks if the loaded page is an error/block/captcha page
+PAGE_HEALTH_CHECK = """
+() => {
+    const title = (document.title || '').toLowerCase();
+    const bodyText = (document.body?.innerText || '').substring(0, 3000).toLowerCase();
+    const bodyLen = (document.body?.innerText || '').length;
+
+    // Too little content — likely an error or redirect stub
+    if (bodyLen < 50) return { ok: false, reason: 'near-empty page' };
+
+    // Known error/block title patterns
+    const badTitles = [
+        'access denied', 'forbidden', '403', '404', 'not found',
+        'error', 'blocked', 'just a moment', 'attention required',
+        'unavailable', 'security check', 'please wait', 'robot',
+        'captcha', 'pardon our interruption',
+    ];
+    for (const t of badTitles) {
+        if (title.includes(t)) return { ok: false, reason: 'error/block title: ' + t };
+    }
+
+    // Cloudflare challenge page
+    if (document.querySelector('#challenge-running, #challenge-form, .cf-browser-verification'))
+        return { ok: false, reason: 'cloudflare challenge' };
+
+    // reCAPTCHA / hCaptcha
+    if (document.querySelector('.g-recaptcha, .h-captcha, iframe[src*="recaptcha"], iframe[src*="hcaptcha"]'))
+        return { ok: false, reason: 'captcha detected' };
+
+    // Generic "access denied" body text
+    const blockPhrases = [
+        'access denied', 'access to this page has been denied',
+        'you have been blocked', 'please verify you are a human',
+        'enable javascript and cookies', 'checking your browser',
+        'this site can\\'t be reached', 'ssl_error',
+    ];
+    for (const p of blockPhrases) {
+        if (bodyText.includes(p) && bodyLen < 500) return { ok: false, reason: 'block phrase: ' + p };
+    }
+
+    return { ok: true, reason: '' };
+}
+"""
+
 SOCIAL_MEDIA_DOMAINS = {
     "twitter.com", "x.com", "facebook.com", "instagram.com",
     "linkedin.com", "youtube.com", "tiktok.com", "snapchat.com",
@@ -264,7 +318,7 @@ def extract_external_links(page, seed_url: str, seen_domains: set[str]) -> list[
 # PHASE 1: CRAWL SEEDS
 # ---------------------------------------------------------------------------
 
-def crawl_hubs(browser, known_domains: set[str]) -> list[tuple[str, str]]:
+def crawl_hubs(context, known_domains: set[str]) -> list[tuple[str, str]]:
     """
     Visit each hub page in DISCOVERY_HUBS, extract external links, and
     return a balanced list of (category_hint, url) tuples capped at
@@ -285,9 +339,7 @@ def crawl_hubs(browser, known_domains: set[str]) -> list[tuple[str, str]]:
 
             print(f"  [HUB {hub_idx}/{total_hubs}] {category} | {hub_url}")
 
-            page = browser.new_page(
-                viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}
-            )
+            page = context.new_page()
             page.set_default_navigation_timeout(NAV_TIMEOUT)
 
             try:
@@ -326,19 +378,31 @@ def crawl_hubs(browser, known_domains: set[str]) -> list[tuple[str, str]]:
 # PHASE 2: SCREENSHOT
 # ---------------------------------------------------------------------------
 
-def screenshot_url(browser, url: str, out_path: str) -> bool:
+def screenshot_url(context, url: str, out_path: str) -> bool:
     """
     Navigate to url and save a screenshot to out_path.
+    Checks HTTP status and page health before capturing.
     Returns True on success, False on failure.
     """
-    page = browser.new_page(
-        viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT}
-    )
+    page = context.new_page()
     page.set_default_navigation_timeout(NAV_TIMEOUT)
 
     try:
-        page.goto(url, wait_until="networkidle")
+        response = page.goto(url, wait_until="networkidle")
+
+        # Check HTTP status
+        if response and response.status in BAD_STATUS_CODES:
+            print(f"  !! HTTP {response.status}: {url}")
+            return False
+
         time.sleep(POST_LOAD_DELAY)
+
+        # Check page health (error screens, captchas, blocks)
+        health = page.evaluate(PAGE_HEALTH_CHECK)
+        if not health.get("ok", True):
+            print(f"  !! BAD PAGE: {url} — {health.get('reason', 'unknown')}")
+            return False
+
         page.screenshot(path=out_path)
         return True
     except PlaywrightTimeoutError:
@@ -458,12 +522,19 @@ def main() -> None:
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
+            user_agent=STEALTH_USER_AGENT,
+            locale="en-US",
+            timezone_id="America/New_York",
+            java_script_enabled=True,
+        )
 
         # ── PHASE 1: CRAWL HUBS ───────────────────────────────────────────
         total_hubs = sum(len(v) for v in DISCOVERY_HUBS.values())
         print(f"\n[PHASE 1] Crawling {total_hubs} hub pages "
               f"(up to {MAX_PER_CATEGORY} URLs per category)...\n")
-        candidates = crawl_hubs(browser, known_domains)
+        candidates = crawl_hubs(context, known_domains)
         print(f"\n[PHASE 1] Complete. {len(candidates)} candidate URLs discovered.\n")
 
         # ── PHASE 2 + 3: SCREENSHOT + CLASSIFY ───────────────────────────
@@ -475,7 +546,7 @@ def main() -> None:
 
             staging_path = os.path.join(OUTPUT_DIR, f"_staging_{domain}.png")
 
-            success = screenshot_url(browser, url, staging_path)
+            success = screenshot_url(context, url, staging_path)
             if not success:
                 stats["failed_nav"] += 1
                 if os.path.exists(staging_path):
@@ -503,6 +574,7 @@ def main() -> None:
 
             append_log(LOG_FILE, url, result)
 
+        context.close()
         browser.close()
 
     print("\n" + "=" * 50)
